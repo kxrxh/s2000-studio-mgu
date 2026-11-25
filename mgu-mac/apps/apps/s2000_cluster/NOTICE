@@ -1,0 +1,13 @@
+The cluster artwork is generated from authored geometry and procedural LCD segments.
+The owner supplied S2000 visual references; no photograph pixels or cropped assets
+are included in the live cluster artwork or Store package. An unmodified reference
+photograph is kept separately for the local preview's comparison view.
+No authorship or licence to Honda's design or the photograph is claimed.
+
+cluster_render_client.js: Copyright (C) 2026 Robert Nisipeanu, MPL-2.0.
+Source: robertnisipeanu/idrive-apps, commit 88e8554b1d81593d85f8095b4f0c38213223990d,
+native/cluster-render/js/cluster_render_client.js. Included unmodified.
+
+The packaged kit/ runtime is reused from cauliflowermossgrape/idrive7-apps.
+Its existing licence and provenance notices apply. BMW's oap-sdk is not included
+in the Store export; the Store reconstructs it from the car's own donor app.

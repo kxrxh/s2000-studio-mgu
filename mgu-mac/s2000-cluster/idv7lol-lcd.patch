@@ -1,0 +1,160 @@
+diff --git a/apps/studio/src/lib/carCompile.ts b/apps/studio/src/lib/carCompile.ts
+index ed059d8..df7430c 100644
+--- a/apps/studio/src/lib/carCompile.ts
++++ b/apps/studio/src/lib/carCompile.ts
+@@ -11,16 +11,17 @@ export interface BakedFont {
+ const fontCache = new Map<string, Promise<BakedFont | null>>();
+ 
+ /** The baked SDF atlas the car uses for a font family, shipped with the Studio. */
+-export function loadBakedFont(family: string): Promise<BakedFont | null> {
+-  let p = fontCache.get(family);
++export function loadBakedFont(family: string, file?: string): Promise<BakedFont | null> {
++  const atlas = family === 'display' && file === 's2000-lcd.ttf' ? 's2000-lcd' : family;
++  let p = fontCache.get(atlas);
+   if (!p) {
+     p = (async () => {
+-      const px = await fetchStatic(`/fonts/${family}.r8`);
+-      const mt = await fetchStatic(`/fonts/${family}.json`);
++      const px = await fetchStatic(`/fonts/${atlas}.r8`);
++      const mt = await fetchStatic(`/fonts/${atlas}.json`);
+       if (!px || !mt) return null;
+       return { pixels: px, metrics: JSON.parse(new TextDecoder().decode(mt)) as object };
+     })();
+-    fontCache.set(family, p);
++    fontCache.set(atlas, p);
+   }
+   return p;
+ }
+@@ -29,7 +30,7 @@ export function loadBakedFont(family: string): Promise<BakedFont | null> {
+ export async function compileForCar(theme: Theme): Promise<CompileResult> {
+   const fonts: Record<string, BakedFont> = {};
+   for (const fam of new Set(Object.values(theme.fonts).map((f) => f.family))) {
+-    const f = await loadBakedFont(fam);
++    const f = await loadBakedFont(fam, theme.fonts.default?.file);
+     if (f) fonts[fam] = f;
+   }
+   return compileTheme(theme, { fonts, images: await decodeThemeImages(theme) });
+diff --git a/apps/studio/src/preview/CarPreview.tsx b/apps/studio/src/preview/CarPreview.tsx
+index 2339004..ff53836 100644
+--- a/apps/studio/src/preview/CarPreview.tsx
++++ b/apps/studio/src/preview/CarPreview.tsx
+@@ -104,7 +104,7 @@ export function CarPreview({
+           }
+           const fonts: Record<string, BakedFont> = {};
+           for (const fam of compiled.fonts) {
+-            const f = await loadBakedFont(fam);
++            const f = await loadBakedFont(fam, theme.fonts.default?.file);
+             if (f) fonts[fam] = f;
+           }
+           if (cancelled || !live.current) return;
+diff --git a/apps/studio/src/styles.css b/apps/studio/src/styles.css
+index 87af5f2..015e5a8 100644
+--- a/apps/studio/src/styles.css
++++ b/apps/studio/src/styles.css
+@@ -2144,3 +2144,9 @@ table.plain th {
+     display: none;
+   }
+ }
++
++@font-face {
++  font-family: 'S2000 LCD';
++  src: url('/fonts/s2000-lcd.ttf') format('truetype');
++  font-weight: 100 900;
++}
+diff --git a/packages/theme-compiler/src/font/bake.ts b/packages/theme-compiler/src/font/bake.ts
+index 5a6af20..e578635 100644
+--- a/packages/theme-compiler/src/font/bake.ts
++++ b/packages/theme-compiler/src/font/bake.ts
+@@ -99,4 +99,23 @@ export function bakeFamily(family: string): BakedFont {
+   return bakeFont(family, new Uint8Array(readFileSync(file)));
+ }
+ 
++/** Replace the display atlas cells that are supplied by the authored S2000 font. */
++export function bakeS2000Lcd(fontFile: Uint8Array): BakedFont {
++  const base = bakeFamily('display');
++  const lcd = bakeFont('display', fontFile);
++  const font = new TrueTypeFont(parseFontFile(fontFile));
++  const { cellW, cellH, cols, chars } = base.metrics;
++  for (let code = 0; code < chars.length; code++) {
++    if (font.glyphIndex(chars.charCodeAt(code)) === 0) continue;
++    const x = (code % cols) * cellW;
++    const y = Math.floor(code / cols) * cellH;
++    for (let row = 0; row < cellH; row++) {
++      const start = (y + row) * base.width + x;
++      base.pixels.set(lcd.pixels.subarray(start, start + cellW), start);
++    }
++    base.metrics.adv[code] = lcd.metrics.adv[code]!;
++  }
++  return base;
++}
++
+ export const FONT_FAMILIES = Object.keys(FONT_FILES);
+diff --git a/packages/theme-compiler/src/glsl.ts b/packages/theme-compiler/src/glsl.ts
+index 590f21a..caef599 100644
+--- a/packages/theme-compiler/src/glsl.ts
++++ b/packages/theme-compiler/src/glsl.ts
+@@ -7,6 +7,7 @@
+  * (screen coordinates, y down), same as the Canvas2D engine.
+  */
+ import type { ShaderKind } from './types.js';
++import { CELL_H, CELL_W } from './font/glyphs.js';
+ 
+ export const PRELUDE = `#version 100
+ #ifdef GL_FRAGMENT_PRECISION_HIGH
+@@ -41,7 +42,11 @@ uniform vec3 u_font_cells; // cols, cellW/cellH, rows
+ float sdfAt(float code, vec2 g) {
+   float row = floor(code / u_font_cells.x);
+   float col = code - row * u_font_cells.x;
+-  vec2 uv = vec2((col + 0.5 + g.x / u_font_cells.y) / u_font_cells.x, (row + g.y) / u_font_cells.z);
++  vec2 cell = vec2(0.5 + g.x / u_font_cells.y, g.y);
++  if (any(lessThan(cell, vec2(0.0))) || any(greaterThanEqual(cell, vec2(1.0)))) return 0.0;
++  // Keep bilinear filtering inside this glyph's cell at its edges.
++  vec2 inset = 0.5 / vec2(${CELL_W}.0, ${CELL_H}.0);
++  vec2 uv = (vec2(col, row) + clamp(cell, inset, vec2(1.0) - inset)) / u_font_cells.xz;
+   return texture2D(u_font, uv).r;
+ }
+ float glyphCov(float s, float h) { float w = 2.0 / max(h, 1.0); return smoothstep(0.5 - w, 0.5 + w, s); }
+diff --git a/packages/theme-compiler/src/node.ts b/packages/theme-compiler/src/node.ts
+index 5357b46..4aa2805 100644
+--- a/packages/theme-compiler/src/node.ts
++++ b/packages/theme-compiler/src/node.ts
+@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+ import { dirname, join, resolve } from 'node:path';
+ import { parseThemeJson, type Theme } from '@idv7lol/theme-schema';
+ import { compileTheme, type CompileOptions } from './compile.js';
+-import { bakeFamily, type BakedFont } from './font/bake.js';
++import { bakeFamily, bakeS2000Lcd, type BakedFont } from './font/bake.js';
+ import { decodePng } from './font/png.js';
+ import type { CompileResult } from './types.js';
+ 
+@@ -60,9 +60,15 @@ export function compileThemeFile(
+   const dir = dirname(resolve(themePath));
+   const families = new Set<string>();
+   for (const f of Object.values(parsed.theme.fonts)) families.add(f.family);
++  const fonts = fontsFor([...families]);
++  const lcd = parsed.theme.fonts.default;
++  if (lcd?.family === 'display' && lcd.file === 's2000-lcd.ttf') {
++    const baked = bakeS2000Lcd(readFileSync(resolve(dir, lcd.file)));
++    fonts.display = { pixels: baked.pixels, metrics: baked.metrics };
++  }
+   return compileTheme(parsed.theme, {
+     ...opts,
+-    fonts: fontsFor([...families]),
++    fonts,
+     images: imagesFor(parsed.theme, dir),
+   });
+ }
+diff --git a/packages/theme-engine/src/render-context.ts b/packages/theme-engine/src/render-context.ts
+index 5accc93..31369bc 100644
+--- a/packages/theme-engine/src/render-context.ts
++++ b/packages/theme-engine/src/render-context.ts
+@@ -117,7 +117,8 @@ export class RenderContext {
+     const fontDef = this.theme.fonts[style.font] ?? this.theme.fonts['default'];
+     const family: FontFamilyId = fontDef?.family ?? 'sans';
+     const stack = this.options.fontFamilies?.[family] ?? DEFAULT_FONT_STACKS[family];
+-    return `${WEIGHTS[style.weight]} ${style.size}px ${stack}`;
++    const face = family === 'display' && fontDef?.file === 's2000-lcd.ttf' ? `"S2000 LCD", ${stack}` : stack;
++    return `${WEIGHTS[style.weight]} ${style.size}px ${face}`;
+   }
+ 
+   /** Apply a text style to the context (font, colour, alignment, spacing). */

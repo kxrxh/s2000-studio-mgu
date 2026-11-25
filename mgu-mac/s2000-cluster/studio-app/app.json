@@ -1,0 +1,27 @@
+{
+  "id": "s2000_idv7",
+  "title": "S2000 Studio Cluster",
+  "description": "Compiled S2000 instrument layout with manual start and factory-cluster restore",
+  "version": "0.1.0",
+  "vendor": "custom",
+  "license": "GPL-3.0-or-later",
+  "loggingId": "S2ST",
+  "iconGlyph": "gauge",
+  "mguHmi": ["ID7"],
+  "signals": {
+    "de.bmw.infotainment.vehicle.CDS": { "statusEngineSpeed2": "rs", "statusEngineTemperature": "rs" },
+    "de.bmw.infotainment.vehicle.Vehicle2": { "statusCarSpeed2": "rs" },
+    "de.bmw.infotainment.KombiIF": { "_optional": "Fuel and odometer", "statusRangeTankStatus": "rs" },
+    "de.bmw.infrastructure.VehicleCondition": { "_optional": "Vehicle power-state changes", "VehicleCondition": "s" }
+  },
+  "screens": [{
+    "name": "MAIN",
+    "kind": "menu",
+    "title": "S2000 Studio Cluster",
+    "items": [
+      ["text", "STATUS", "Выключен — штатная BMW"],
+      ["button", "BTN_ENABLE", "Включить S2000"],
+      ["button", "BTN_DISABLE", "Выключить и вернуть BMW"]
+    ]
+  }]
+}
